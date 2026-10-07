@@ -15,11 +15,39 @@
 <p>使用 Flutter 开发的基于自定义规则的番剧采集与在线观看程序。使用最多五行基于 <code>Xpath</code> 语法的选择器构建自己的规则。支持规则导入与规则分享。支持基于 <code>Anime4K</code> 的实时超分辨率。绝赞开发中 (～￣▽￣)～</p>
 </div>
 
-## 支持平台
+# Kazumi Windows WebView2 兼容性分支
 
-> This repository is a personal, unofficial fork of Kazumi.
-> It contains experimental Windows WebView2 / anti-crawler and media compatibility changes.
-> See [Windows compatibility changes](docs/windows-cloudflare-webview-changes.md) for details.
+这是专注于 Windows WebView2 兼容性的 Kazumi 非官方个人分支，与上游项目无隶属关系，也未获得上游认可或背书。原项目为 [Predidit/Kazumi](https://github.com/Predidit/Kazumi)，保留原作者、贡献者归属及 GPL-3.0 许可证；下方原项目 README 继续保留。
+
+主要兼容性修改包括：
+
+- Windows 内可见的 Cloudflare／反爬验证页面。
+- 验证成功后复用 WebView2 会话，减少后续搜索的重复验证。
+- 直接获取受保护页面渲染后的 HTML，再使用规则解析。
+- 已验收的 hanime1 规则搜索与部分视频播放兼容性。
+- 修复 WebView 视频解析广播流漏掉早期事件的问题。
+- 增加 DOM `video.currentSrc` 等媒体地址的备用解析方式。
+- 修复部分页面约 15 秒后出现 `VideoSourceTimeoutException` 的情况。
+- 缓解 Windows WebView 销毁过程中的原生访问冲突崩溃。
+
+完整改动、固定依赖、构建方式和限制见 [Windows Cloudflare／WebView 兼容性说明](docs/windows-cloudflare-webview-changes.md)。本仓库维护源码，不提供安装包或二进制发布。
+
+hanime1 兼容性已经人工验收，但不代表上游官方支持，也不代表所有视频都经过测试。首次 Cloudflare 验证可能一次通过，也可能需要多次尝试；成功后通常可复用当前会话，不保证兼容所有或未来的 Cloudflare 验证实现。
+
+## 常见症状与检索关键词
+
+遇到以下现象时，可以查看本分支的兼容性说明。右侧是相关问题常用的检索词，方便按实际症状找到对应改动。
+
+| 常见症状 | 相关检索词 |
+| --- | --- |
+| Cloudflare 验证失败，或需多次尝试才能通过 | `Kazumi Windows Cloudflare`、`Kazumi anti-crawler` |
+| hanime1 等受保护搜索页无法通过普通 HTTP 请求解析 | `Kazumi hanime1` |
+| 页面已经加载，但媒体地址未被捕获 | `Kazumi WebView2`、`video.currentSrc` |
+| 播放等待约 15 秒后抛出解析超时异常 | `Kazumi VideoSourceTimeoutException`、`Windows video parser timeout` |
+| WebView 销毁时出现原生访问冲突 | `webview_windows_plugin.dll` |
+| 希望验证成功后继续复用浏览器会话 | `WebView session reuse` |
+
+## 支持平台
 
 - Android 10 及以上
 - Windows 10 及以上
