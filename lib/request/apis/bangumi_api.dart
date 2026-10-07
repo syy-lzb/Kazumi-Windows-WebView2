@@ -285,7 +285,6 @@ class BangumiApi {
       "type": [2],
       "tag": tags,
       "rank": rankFilter,
-      "nsfw": false
     };
 
     if (dateRange?.isValid == true) {
@@ -316,6 +315,19 @@ class BangumiApi {
       SearchDoubleRange? scoreRange,
       List<int> weekdays = const []}) async {
     List<BangumiItem> bangumiList = [];
+
+    // The public legacy keyword index still exposes entries absent from v0
+    // search. It cannot implement advanced filters, so retain v0 for those.
+    if (keyword.trim().isNotEmpty &&
+        tags.isEmpty &&
+        sort == 'heat' &&
+        dateRange?.isValid != true &&
+        rankRange?.isValid != true &&
+        scoreRange?.isValid != true &&
+        weekdays.isEmpty) {
+      final legacyPage = await _searchLegacyKeyword(keyword, limit, offset);
+      if (legacyPage != null) return legacyPage;
+    }
 
     final params = buildBangumiSearchParams(
       keyword,
@@ -354,6 +366,58 @@ class BangumiApi {
       );
     } catch (e) {
       KazumiLogger().e('Network: unknown search problem', error: e);
+      return null;
+    }
+  }
+
+  static Future<BangumiSearchPage?> _searchLegacyKeyword(
+      String keyword, int limit, int offset) async {
+    try {
+      final jsonData = await _client.get(
+        '${ApiEndpoints.bangumiAPIDomain}/search/subject/'
+        '${Uri.encodeComponent(keyword.trim())}',
+        queryParameters: {
+          'type': 2,
+          'responseGroup': 'large',
+          'max_results': limit,
+          'start': offset,
+        },
+      );
+      if (jsonData is! Map ||
+          jsonData['list'] is! List ||
+          jsonData['results'] is! num) {
+        return null;
+      }
+      final rawItems = jsonData['list'] as List;
+      final items = <BangumiItem>[];
+      for (final raw in rawItems) {
+        if (raw is! Map<String, dynamic>) continue;
+        try {
+          final rating = raw['rating'];
+          items.add(BangumiItem.fromJson({
+            ...raw,
+            'date': raw['air_date'],
+            'rating': {
+              if (rating is Map<String, dynamic>) ...rating,
+              'rank': raw['rank'] ?? 0,
+            },
+          }));
+        } catch (error) {
+          KazumiLogger().w('Network: legacy search item parse failed',
+              error: error);
+        }
+      }
+      if (rawItems.isNotEmpty && items.isEmpty) return null;
+      // The index may omit unavailable entries from a source page. Advance
+      // by its page width rather than the smaller displayed result count.
+      final total = (jsonData['results'] as num).toInt();
+      return BangumiSearchPage(
+        items: items,
+        rawCount: (total - offset).clamp(0, limit).toInt(),
+      );
+    } catch (error) {
+      KazumiLogger().w('Network: legacy search unavailable, using v0',
+          error: error);
       return null;
     }
   }

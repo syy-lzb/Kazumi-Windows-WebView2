@@ -21,14 +21,40 @@ class PluginSearchService {
   final Map<String, AsyncSessionOwner> _querySessions = {};
   bool _isCancelled = false;
 
+  /// Prepares a source for a result that will be supplied by an external
+  /// transport (for example a verified WebView2 session).
+  void prepareExternalSearch(String pluginName) {
+    if (_isCancelled) return;
+    infoController.pluginSearchResponseList.removeWhere(
+      (response) => response.pluginName == pluginName,
+    );
+    infoController.pluginSearchStatus[pluginName] = PluginSearchStatus.pending;
+  }
+
+  void markCaptchaRequired(String pluginName) {
+    if (_isCancelled) return;
+    infoController.pluginSearchStatus[pluginName] = PluginSearchStatus.captcha;
+  }
+
+  void markSearchError(String pluginName) {
+    if (_isCancelled) return;
+    infoController.pluginSearchStatus[pluginName] = PluginSearchStatus.error;
+  }
+
+  void prepareAllSources() {
+    if (_isCancelled) return;
+    infoController.pluginSearchResponseList.clear();
+    infoController.pluginSearchStatus.clear();
+    for (final plugin in pluginsController.pluginList) {
+      infoController.pluginSearchStatus[plugin.name] =
+          PluginSearchStatus.pending;
+    }
+  }
+
   Future<void> querySource(String keyword, String pluginName) async {
     for (final plugin in pluginsController.pluginList) {
       if (plugin.name == pluginName) {
-        infoController.pluginSearchResponseList.removeWhere(
-          (response) => response.pluginName == pluginName,
-        );
-        infoController.pluginSearchStatus[pluginName] =
-            PluginSearchStatus.pending;
+        prepareExternalSearch(pluginName);
         await _queryPlugin(plugin, keyword);
         return;
       }
@@ -36,8 +62,9 @@ class PluginSearchService {
   }
 
   /// Publishes the result page harvested by the captcha webview, skipping
-  /// one network round trip. Returns false when the HTML does not parse
-  /// into results; callers should fall back to [querySource].
+  /// one network round trip. A valid page with zero items is published as
+  /// [PluginSearchStatus.noResult]. Returns false only when the HTML itself
+  /// cannot be parsed as this rule's search page.
   bool applyHarvestedSearchResult(String pluginName, String html) {
     if (_isCancelled) return false;
     for (final plugin in pluginsController.pluginList) {
@@ -47,6 +74,14 @@ class PluginSearchService {
       infoController.pluginSearchResponseList.removeWhere(
         (response) => response.pluginName == pluginName,
       );
+      if (result.data.isEmpty) {
+        infoController.pluginSearchStatus[pluginName] =
+            PluginSearchStatus.noResult;
+        KazumiLogger().i(
+          'PluginSearchService: harvested page has no results for $pluginName',
+        );
+        return true;
+      }
       infoController.pluginSearchStatus[pluginName] =
           PluginSearchStatus.success;
       pluginsController.validityTracker.markSearchValid(pluginName);
@@ -57,17 +92,9 @@ class PluginSearchService {
   }
 
   Future<void> queryAllSource(String keyword) async {
-    infoController.pluginSearchResponseList.clear();
-    infoController.pluginSearchStatus.clear();
-
+    prepareAllSources();
     final plugins = List<Plugin>.of(pluginsController.pluginList);
-    for (final plugin in plugins) {
-      infoController.pluginSearchStatus[plugin.name] =
-          PluginSearchStatus.pending;
-    }
-    await Future.wait(
-      plugins.map((plugin) => _queryPlugin(plugin, keyword)),
-    );
+    await Future.wait(plugins.map((plugin) => _queryPlugin(plugin, keyword)));
   }
 
   Future<void> _queryPlugin(Plugin plugin, String keyword) async {

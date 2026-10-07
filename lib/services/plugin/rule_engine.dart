@@ -23,10 +23,10 @@ class RuleEngine {
     ApiRuleStrategy apiStrategy = const ApiRuleStrategy(),
     XPathRuleStrategy xpathStrategy = const XPathRuleStrategy(),
     bool logFailures = true,
-  })  : _requestExecutor = requestExecutor ?? _DefaultRuleRequestExecutor(),
-        _apiStrategy = apiStrategy,
-        _xpathStrategy = xpathStrategy,
-        _logFailures = logFailures;
+  }) : _requestExecutor = requestExecutor ?? _DefaultRuleRequestExecutor(),
+       _apiStrategy = apiStrategy,
+       _xpathStrategy = xpathStrategy,
+       _logFailures = logFailures;
 
   final RuleRequestExecutor _requestExecutor;
   final ApiRuleStrategy _apiStrategy;
@@ -98,8 +98,8 @@ class RuleEngine {
   /// Parses HTML harvested from the captcha webview as a search result,
   /// skipping one network round trip after verification. Returns null when
   /// not applicable (API/POST rules) or when the page does not parse into
-  /// results (still a challenge page, redirect page, or empty list) — the
-  /// caller then falls back to a regular re-search.
+  /// results. An empty, successfully parsed page is returned as an empty
+  /// response so callers can surface "no results" without retrying through Dio.
   PluginSearchResponse? tryParseHarvestedSearch(
     RuleExecutionConfig config,
     String raw,
@@ -110,8 +110,11 @@ class RuleEngine {
     if (config.searchMode == RuleMode.api || config.usePost) return null;
     try {
       final parsed = _xpathStrategy.parseSearch(raw, config);
-      if (parsed.items.isEmpty) return null;
       _logDiagnostics(config, 'harvested search', parsed.diagnostics);
+      // A successfully harvested search page with zero matching items is a
+      // legitimate "no results" response. Returning an empty response here
+      // prevents callers from falling back to Dio, which would simply hit the
+      // same anti-bot 403 again and incorrectly ask for another verification.
       return PluginSearchResponse(
         pluginName: config.pluginName,
         data: parsed.items,
@@ -233,6 +236,23 @@ class RuleEngine {
 
     final response = rawError.response;
 
+    // For anti-crawler-enabled XPath rules, protected sites commonly return
+    // 403/429/503 even after a WebView clearance has been captured. The
+    // clearance may remain bound to the browser/TLS fingerprint and therefore
+    // cannot always be replayed successfully by Dio. Treat these protection
+    // status codes as a signal to hand the request back to the interactive
+    // WebView flow, which can load the real search page and harvest its HTML.
+    final statusCode = response?.statusCode;
+    if (statusCode == 403 || statusCode == 429 || statusCode == 503) {
+      if (_logFailures) {
+        KazumiLogger().i(
+          'Plugin: ${config.pluginName} HTTP $statusCode treated as '
+          'anti-crawler challenge',
+        );
+      }
+      return true;
+    }
+
     // Cloudflare marks managed challenge responses with this header.
     // This is useful when the body is empty, compressed unexpectedly, or
     // otherwise unavailable to Dio on a specific platform.
@@ -343,8 +363,10 @@ class _DefaultRuleRequestExecutor implements RuleRequestExecutor {
     final uri = Uri.tryParse(url);
     if (uri == null) return '';
     try {
-      final cookies =
-          await PluginCookieManager.instance.loadForRequest(pluginName, uri);
+      final cookies = await PluginCookieManager.instance.loadForRequest(
+        pluginName,
+        uri,
+      );
       return cookies
           .map((cookie) => '${cookie.name}=${cookie.value}')
           .join('; ');

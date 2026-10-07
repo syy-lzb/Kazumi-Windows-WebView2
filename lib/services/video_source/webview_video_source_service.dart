@@ -72,18 +72,22 @@ class WebViewVideoSourceService implements IVideoSourceService {
     }
 
     var didStartLoad = false;
+    StreamSubscription<VideoParserEvent>? parserSubscription;
     try {
       request.throwIfNotCurrent(_activeRequest);
-      didStartLoad = true;
-      await _webview!.loadUrl(
-        episodeUrl,
-        useLegacyParser,
-        offset: offset,
-      );
 
-      request.throwIfNotCurrent(_activeRequest);
+      final parserCompleter = Completer<VideoParserEvent>();
 
-      final parserFuture = _webview!.onVideoURLParser.first.timeout(
+      // Subscribe before navigation starts. onVideoURLParser is backed by a
+      // broadcast stream, so media events emitted during loadUrl would
+      // otherwise be lost before the later .first subscription is attached.
+      parserSubscription = _webview!.onVideoURLParser.listen((event) {
+        if (!parserCompleter.isCompleted) {
+          parserCompleter.complete(event);
+        }
+      });
+
+      final parserFuture = parserCompleter.future.timeout(
         timeout,
         onTimeout: () {
           request.throwIfNotCurrent(_activeRequest);
@@ -93,6 +97,16 @@ class WebViewVideoSourceService implements IVideoSourceService {
       final cancelFuture = request.cancelled.then<VideoParserEvent>((_) {
         throw const VideoSourceCancelledException();
       });
+
+      didStartLoad = true;
+      await _webview!.loadUrl(
+        episodeUrl,
+        useLegacyParser,
+        offset: offset,
+      );
+
+      request.throwIfNotCurrent(_activeRequest);
+
       final event = await Future.any([parserFuture, cancelFuture]);
 
       request.throwIfNotCurrent(_activeRequest);
@@ -110,6 +124,7 @@ class WebViewVideoSourceService implements IVideoSourceService {
       request.throwIfNotCurrent(_activeRequest);
       rethrow;
     } finally {
+      await parserSubscription?.cancel();
       if (didStartLoad) {
         await _webview?.unloadPage();
       }

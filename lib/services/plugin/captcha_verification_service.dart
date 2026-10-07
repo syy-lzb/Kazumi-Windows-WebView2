@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/widgets.dart';
 import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/utils/async_single_flight.dart';
@@ -42,6 +44,7 @@ class CaptchaVerificationService {
   final AsyncSingleFlight<String> _finalize = AsyncSingleFlight<String>();
 
   bool _outcomeClaimed = false;
+  int _operationGeneration = 0;
 
   /// 认领向 UI 提交结果的权利。
   ///
@@ -52,6 +55,20 @@ class CaptchaVerificationService {
     if (_outcomeClaimed) return false;
     _outcomeClaimed = true;
     return true;
+  }
+
+  /// Reuses the same WebView controller for a new search operation.
+  ///
+  /// The WebView2 profile (and therefore browser-side Cloudflare clearance)
+  /// stays alive; only per-operation subscriptions/outcome state are reset.
+  void resetForNextOperation() {
+    if (_disposed) return;
+    _imageFoundSub?.cancel();
+    _imageFoundSub = null;
+    _disappearedSub?.cancel();
+    _disappearedSub = null;
+    _outcomeClaimed = false;
+    _operationGeneration++;
   }
 
   /// 订阅验证通过事件：收尾后把收割到的 HTML 交给 [onVerified]。
@@ -67,16 +84,23 @@ class CaptchaVerificationService {
   }) {
     final controller = _controller;
     if (controller == null) return;
+    final operationGeneration = _operationGeneration;
 
     Future<void> onDisappeared() async {
+      if (operationGeneration != _operationGeneration) return;
       _disappearedSub?.cancel();
       // 重新读取：订阅到事件之间可能已被 dispose 置空。
       final current = _controller;
       if (current == null) return;
       onFinalizing?.call();
-      final pageHtml = await _finalize.run(() =>
-          _saveCookiesAndUnload(current, pluginName, logPrefix: logPrefix));
-      if (_disposed || !_claimOutcome()) return;
+      final pageHtml = await _finalize.run(
+        () => _saveCookiesAndUnload(current, pluginName, logPrefix: logPrefix),
+      );
+      if (_disposed ||
+          operationGeneration != _operationGeneration ||
+          !_claimOutcome()) {
+        return;
+      }
       onVerified(pageHtml);
     }
 
@@ -89,8 +113,10 @@ class CaptchaVerificationService {
   Future<void> _ensureInitialized() async {
     if (_isInitialized || _disposed) return;
     _controller = CaptchaWebviewControllerFactory.getController();
-    final initializedFuture = _controller!.onInitialized.first
-        .timeout(const Duration(seconds: 10), onTimeout: () => false);
+    final initializedFuture = _controller!.onInitialized.first.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => false,
+    );
 
     await _controller!.init();
     if (_disposed) return;
@@ -104,21 +130,37 @@ class CaptchaVerificationService {
     KazumiLogger().i('[CaptchaVerificationService] WebView initialized');
   }
 
+  /// 在支持可见验证页的平台（当前为 Windows）提前初始化 WebView，
+  /// 并返回可嵌入对话框的交互视图。
+  ///
+  /// 其他平台返回 null 且不改变原有无界面验证流程。验证通过后仍从
+  /// 同一 WebView 实例收割 Cookie / UA / HTML。
+  Future<Widget?> prepareInteractiveView() async {
+    if (!Platform.isWindows) return null;
+    await _ensureInitialized();
+    if (_disposed) return null;
+    return _controller?.buildVerificationView();
+  }
+
   /// 加载指定页面并开始监听验证码图片
   ///
   /// [url] 要加载的页面地址
   /// [captchaXpath] 验证码图片元素的 XPath
   /// [inputXpath] 可选，验证码输入框的 XPath。如果提供，会在检测验证码前先触发输入框的 focus 事件
-  Future<void> loadForCaptcha(String url, String captchaXpath,
-      {String? inputXpath}) async {
+  Future<void> loadForCaptcha(
+    String url,
+    String captchaXpath, {
+    String? inputXpath,
+  }) async {
     _pageUrl = url;
     await _ensureInitialized();
     if (_disposed || _controller == null) return;
 
     _imageFoundSub?.cancel();
     _imageFoundSub = _controller!.onCaptchaImageFound.listen((src) {
-      KazumiLogger()
-          .i('[CaptchaVerificationService] Captcha image found: $src');
+      KazumiLogger().i(
+        '[CaptchaVerificationService] Captcha image found: $src',
+      );
       if (!_captchaImageStreamController.isClosed) {
         _captchaImageStreamController.add(src);
       }
@@ -140,17 +182,22 @@ class CaptchaVerificationService {
     void Function()? onFinalizing,
   }) async {
     if (_controller == null) {
-      KazumiLogger()
-          .w('[CaptchaVerificationService] submitCaptcha called before init');
+      KazumiLogger().w(
+        '[CaptchaVerificationService] submitCaptcha called before init',
+      );
       return;
     }
 
-    KazumiLogger()
-        .i('[CaptchaVerificationService] Submitting captcha code via interact');
+    KazumiLogger().i(
+      '[CaptchaVerificationService] Submitting captcha code via interact',
+    );
 
     _listenForVerification(pluginName, onVerified, onFinalizing: onFinalizing);
-    await _controller!
-        .submitCaptchaInteract(captchaCode, inputXpath, buttonXpath);
+    await _controller!.submitCaptchaInteract(
+      captchaCode,
+      inputXpath,
+      buttonXpath,
+    );
   }
 
   /// 加载 [url] 并在检测到 [buttonXpath] 后自动点击
@@ -167,7 +214,8 @@ class CaptchaVerificationService {
     _listenForVerification(pluginName, onVerified, logPrefix: '(type2) ');
     await _controller!.loadPageForButtonClick(url, buttonXpath);
     KazumiLogger().i(
-        '[CaptchaVerificationService] (type2) Page loading for button click: $url');
+      '[CaptchaVerificationService] (type2) Page loading for button click: $url',
+    );
   }
 
   /// 加载 [url] 并注入规则提供的验证脚本 [script]
@@ -184,7 +232,48 @@ class CaptchaVerificationService {
     _listenForVerification(pluginName, onVerified, logPrefix: '(type3) ');
     await _controller!.loadPageForCustomScript(url, script);
     KazumiLogger().i(
-        '[CaptchaVerificationService] (type3) Page loading for custom script: $url');
+      '[CaptchaVerificationService] (type3) Page loading for custom script: $url',
+    );
+  }
+
+  /// Uses the already-initialized WebView session to harvest another search
+  /// page without presenting the verification dialog.
+  ///
+  /// Returns null when the page does not reach the rule's completion signal
+  /// within [timeout]. The caller can then expose the same browser session in
+  /// the visible verification dialog.
+  Future<String?> harvestForCustomScript({
+    required String url,
+    required String script,
+    required String pluginName,
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    resetForNextOperation();
+    _pageUrl = url;
+    await _ensureInitialized();
+    if (_disposed || _controller == null) return null;
+
+    final completed = Completer<String>();
+    _listenForVerification(pluginName, (pageHtml) {
+      if (!completed.isCompleted) completed.complete(pageHtml);
+    }, logPrefix: '(silent type3) ');
+
+    await _controller!.loadPageForCustomScript(url, script);
+    KazumiLogger().i(
+      '[CaptchaVerificationService] (silent type3) Page loading: $url',
+    );
+
+    try {
+      return await completed.future.timeout(timeout);
+    } on TimeoutException {
+      _disappearedSub?.cancel();
+      _disappearedSub = null;
+      KazumiLogger().i(
+        '[CaptchaVerificationService] Silent harvest timed out; '
+        'interactive verification may be required',
+      );
+      return null;
+    }
   }
 
   /// 用户取消验证：认领结果提交权并保存已有 Cookie。
@@ -199,12 +288,14 @@ class CaptchaVerificationService {
     final controller = _controller;
     if (controller == null || _pageUrl.isEmpty) return;
     // 若验证成功路径已在收尾，这里会汇合到那一次并等它把 Cookie 存完。
-    await _finalize.run(() => _saveCookiesAndUnload(
-          controller,
-          pluginName,
-          logPrefix: 'on cancel ',
-          harvestHtml: false,
-        ));
+    await _finalize.run(
+      () => _saveCookiesAndUnload(
+        controller,
+        pluginName,
+        logPrefix: 'on cancel ',
+        harvestHtml: false,
+      ),
+    );
   }
 
   /// 保存 Cookie 与 User-Agent 并卸载页面。
@@ -227,18 +318,24 @@ class CaptchaVerificationService {
       if (harvestHtml) {
         pageHtml = await _waitForPageHtml(controller);
         KazumiLogger().i(
-            '[CaptchaVerificationService] ${logPrefix}Harvested page html length: ${pageHtml.length}');
+          '[CaptchaVerificationService] ${logPrefix}Harvested page html length: ${pageHtml.length}',
+        );
       }
       final cookieString = await controller.getCookieString(_pageUrl);
       final userAgent = await controller.getUserAgent();
       KazumiLogger().i(
-          '[CaptchaVerificationService] ${logPrefix}Captured cookies: $cookieString');
+        '[CaptchaVerificationService] ${logPrefix}Captured cookies: $cookieString',
+      );
       if (cookieString.isNotEmpty) {
         await PluginCookieManager.instance.saveFromWebView(
-            pluginName, _pageUrl, cookieString,
-            userAgent: userAgent);
+          pluginName,
+          _pageUrl,
+          cookieString,
+          userAgent: userAgent,
+        );
         KazumiLogger().i(
-            '[CaptchaVerificationService] ${logPrefix}Cookies saved for plugin: $pluginName');
+          '[CaptchaVerificationService] ${logPrefix}Cookies saved for plugin: $pluginName',
+        );
       }
       await controller.unloadPage();
     } catch (error, stackTrace) {

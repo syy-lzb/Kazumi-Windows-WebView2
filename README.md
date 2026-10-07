@@ -17,6 +17,10 @@
 
 ## 支持平台
 
+> This repository is a personal, unofficial fork of Kazumi.
+> It contains experimental Windows WebView2 / anti-crawler and media compatibility changes.
+> See [Windows compatibility changes](docs/windows-cloudflare-webview-changes.md) for details.
+
 - Android 10 及以上
 - Windows 10 及以上
 - MacOS 10.15 及以上

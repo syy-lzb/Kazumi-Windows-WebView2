@@ -26,7 +26,10 @@ dependencies:
   hive_ce_flutter: ^2.3.3
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
-  ech_http: ^0.2.1
+  ech_http:
+    git:
+      url: https://github.com/syy-lzb/ech_http.git
+      ref: 8a0077271605774f75f05170225ebcc82352d361
   http: ^1.6.0
   image: ^4.8.0
   file_picker: ^10.3.7
@@ -86,21 +89,21 @@ dependencies:
   image_picker: ^1.2.1
   webview_windows:
     git:
-      url: https://github.com/Predidit/flutter-webview-windows.git
-      ref: 2b3306d2bfb9f22cbb328743b60e547cf50f0c3c
+      url: https://github.com/syy-lzb/flutter-webview-windows.git
+      ref: 04786a4df07cfd7fa3496f01b14699e60055dba9
   desktop_webview_window:
     git:
       url: https://github.com/Predidit/linux_webview_window.git
       ref: b429f8ba6b8a99cd0f7eb5fe8d1621f325635c3d
   media_kit:
     git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: 803c4a27912091db6f839d48d1b984a0d9f588c7
+      url: https://github.com/syy-lzb/media-kit.git
+      ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
       path: ./media_kit
   media_kit_video:
     git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: 803c4a27912091db6f839d48d1b984a0d9f588c7
+      url: https://github.com/syy-lzb/media-kit.git
+      ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
       path: ./media_kit_video
   macos_secure_bookmarks: ^0.2.1
 

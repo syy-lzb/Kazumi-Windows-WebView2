@@ -1,0 +1,52 @@
+[
+  {
+    "Path": "lib/pages/info/source_captcha_flow.dart",
+    "SHA256": "3024707BF47FE00ACC4B99F5F3A1BC3BCE4BB7CB2BA2FA9E058D2CDCC4D32061",
+    "GitBlob": "669fc882a6bf1ecc3b186db40483fc75b067e54c"
+  },
+  {
+    "Path": "lib/pages/info/source_sheet.dart",
+    "SHA256": "871E0E49FBF7217D1BE350EF9CA23622C5B1B4A0DB4776810CDE4751C78760DB",
+    "GitBlob": "86760b5f1486b8f13234b5ee543bc7903dc71ee0"
+  },
+  {
+    "Path": "lib/plugins/plugins.dart",
+    "SHA256": "12F784877706D6FB301736A7F94C36F5938D552B0D0BA7E76A90ED2F1C57CA10",
+    "GitBlob": "e6a04bb5c8d70a74487b7a3a16dbd1ed2e2db5f8"
+  },
+  {
+    "Path": "lib/services/plugin/captcha_verification_service.dart",
+    "SHA256": "9979200AB6F7F0283DC1455F27692F7A92A1AB2C9EA3A588AE9A6B0512700272",
+    "GitBlob": "d374874203c2c5b35e46857369c328f9f912f052"
+  },
+  {
+    "Path": "lib/services/plugin/plugin_search_service.dart",
+    "SHA256": "D18BAAE56F4259461B048508403CD7FFBFDCE1BF73509B1297FA66AEA457E3EC",
+    "GitBlob": "5edf8c100586006599aa0156e29ce4ad9aeaec36"
+  },
+  {
+    "Path": "lib/services/plugin/rule_engine.dart",
+    "SHA256": "81A274B2C4B41E8F241238930812236933CA3E8BF9023C7F583F36CD1E319A5F",
+    "GitBlob": "d935aed16035a59df276fbb4b65656a13e41ba6c"
+  },
+  {
+    "Path": "lib/services/video_source/webview_video_source_service.dart",
+    "SHA256": "7239D2FB32F54663E88102B3810426F3A897B15F7A23F7B0134E329525AA6404",
+    "GitBlob": "632f6301aa454b8b4c7f812b5f88b387299e856f"
+  },
+  {
+    "Path": "lib/webview/captcha/captcha_webview_controller.dart",
+    "SHA256": "DD0DA240DCB36C69BABE610C78F2DA9C503AEE32F853E84E2A6B0B2E3A98D077",
+    "GitBlob": "bb316067ff8d941d697d044318c64330a1c2fe0a"
+  },
+  {
+    "Path": "lib/webview/captcha/impl/captcha_webview_windows_impl.dart",
+    "SHA256": "F4578BA6409D1187FEB197CDE8A8B417C372D6C8C9000312AE132ED1EBBEFE00",
+    "GitBlob": "75520d2d05c7a655372a230a2b0511348ae427f0"
+  },
+  {
+    "Path": "lib/webview/video/impl/video_webview_windows_impl.dart",
+    "SHA256": "6DD642F454AD1A9FD4FA4497764A6521E5F513C2BCFAA49FECDFC4E6775E89E7",
+    "GitBlob": "4680b6db7839516a4948c4fe42c64b4fa6478435"
+  }
+]

@@ -13,7 +13,7 @@ void main() {
       expect(filter['type'], [2]);
       expect(filter['tag'], isEmpty);
       expect(filter['rank'], [">=0", "<=99999"]);
-      expect(filter['nsfw'], isFalse);
+      expect(filter.containsKey('nsfw'), isFalse);
     });
 
     test('builds advanced filter params', () {
@@ -38,7 +38,7 @@ void main() {
       expect(filter['rank'], [">=1", "<=1000"]);
       expect(filter['rating'], [">=8.0", "<=10.0"]);
       expect(filter['air_weekday'], [1, 6]);
-      expect(filter['nsfw'], isFalse);
+      expect(filter.containsKey('nsfw'), isFalse);
     });
   });
 }

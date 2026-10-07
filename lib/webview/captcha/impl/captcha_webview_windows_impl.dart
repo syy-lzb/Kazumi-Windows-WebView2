@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -8,38 +9,53 @@ import 'package:kazumi/webview/captcha/captcha_webview_controller.dart';
 
 class CaptchaWebviewWindowsImpl
     extends CaptchaWebviewController<WebviewController> {
-  HeadlessWebview? _headlessWebview;
   final List<StreamSubscription> _subscriptions = [];
   String _currentCaptchaImageXpath = '';
   String _currentInputXpath = '';
   String _currentPageUrl = '';
   String _buttonXpath = '';
   String? _customScript;
+  int _customScriptGeneration = 0;
+
+  /// 使用可见的 [WebviewController] 而非 HeadlessWebview，以便在对话框中
+  /// 嵌入真正可点击/滚动的 WebView2（Cloudflare 等人工验证）。
+  /// Cookie/UA/HTML 仍从同一实例收割。
+  WebviewController? get _wv => webviewController;
 
   @override
   Future<void> init() async {
     await _setupProxy();
-    _headlessWebview ??= HeadlessWebview();
-    await _headlessWebview!.run();
-    await _headlessWebview!.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
+    final controller = WebviewController();
+    // 先挂到 webviewController，保证 init 失败时 dispose 仍可释放。
+    webviewController = controller;
+    await controller.initialize();
+    await controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
 
     // Listen for messages from JavaScript via window.chrome.webview.postMessage
-    _subscriptions.add(
-      _headlessWebview!.webMessage.listen(_onWebMessage),
-    );
+    _subscriptions.add(controller.webMessage.listen(_onWebMessage));
 
-    // Inject the active verification script when navigation completes.
+    // Custom-script rules should not have to wait for every image/ad/analytics
+    // request before they can inspect the DOM. Schedule an early injection on
+    // every navigation-state change; the JS-side guard prevents duplicates in
+    // the same document. A redirect creates a new document and is injected
+    // again automatically.
     _subscriptions.add(
-      _headlessWebview!.loadingState.listen((state) async {
+      controller.loadingState.listen((state) async {
+        final customScript = _customScript;
+        if (customScript != null) {
+          unawaited(
+            _injectCustomScriptWhenReady(customScript, _customScriptGeneration),
+          );
+        }
+
         if (state == LoadingState.navigationCompleted) {
-          logEventController
-              .add('[Captcha WebView] Navigation completed: $_currentPageUrl');
+          logEventController.add(
+            '[Captcha WebView] Navigation completed: $_currentPageUrl',
+          );
           if (_currentCaptchaImageXpath.isNotEmpty) {
             await _injectCaptchaScript();
           } else if (_buttonXpath.isNotEmpty) {
             await _injectButtonClickScript(_buttonXpath);
-          } else if (_customScript != null) {
-            await _injectCustomScript(_customScript!);
           }
         }
       }),
@@ -48,20 +64,22 @@ class CaptchaWebviewWindowsImpl
     // After a navigation, detect verification completion for captcha-image
     // and automated flows that marked a verification action as clicked.
     _subscriptions.add(
-      _headlessWebview!.loadingState.listen((state) async {
+      controller.loadingState.listen((state) async {
         if (state == LoadingState.navigationCompleted) {
           if (captchaWasFound) {
             final present = await _isCaptchaPresent();
             if (!present && !captchaDisappearedController.isClosed) {
-              logEventController
-                  .add('[Captcha WebView] Captcha gone after navigation');
+              logEventController.add(
+                '[Captcha WebView] Captcha gone after navigation',
+              );
               captchaWasFound = false;
               captchaDisappearedController.add(null);
             }
           }
           if (buttonWasClicked && !captchaDisappearedController.isClosed) {
             logEventController.add(
-                '[Captcha WebView] Button click → page navigated, verification done');
+              '[Captcha WebView] Button click → page navigated, verification done',
+            );
             buttonWasClicked = false;
             captchaDisappearedController.add(null);
           }
@@ -70,6 +88,21 @@ class CaptchaWebviewWindowsImpl
     );
 
     initEventController.add(true);
+  }
+
+  @override
+  Widget? buildVerificationView() {
+    final controller = _wv;
+    if (controller == null) return null;
+    return ValueListenableBuilder<WebviewValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        if (!value.isInitialized) {
+          return const Center(child: Text('正在准备验证页面…'));
+        }
+        return Webview(controller);
+      },
+    );
   }
 
   void _onWebMessage(dynamic message) {
@@ -90,20 +123,21 @@ class CaptchaWebviewWindowsImpl
         captchaDisappearedController.add(null);
       }
     } else if (msg.startsWith('captchaLog:')) {
-      logEventController
-          .add('[Captcha WebView JS] ${msg.replaceFirst('captchaLog:', '')}');
+      logEventController.add(
+        '[Captcha WebView JS] ${msg.replaceFirst('captchaLog:', '')}',
+      );
     }
   }
 
   Future<bool> _isCaptchaPresent() async {
-    if (_currentCaptchaImageXpath.isEmpty || _headlessWebview == null) {
+    if (_currentCaptchaImageXpath.isEmpty || _wv == null) {
       return false;
     }
     final escaped = _currentCaptchaImageXpath
         .replaceAll('\\', '\\\\')
         .replaceAll("'", "\\'");
     try {
-      final result = await _headlessWebview!.executeScript('''
+      final result = await _wv!.executeScript('''
 (function() {
   try {
     var r = document.evaluate('$escaped', document, null,
@@ -124,10 +158,12 @@ class CaptchaWebviewWindowsImpl
     final escapedXpath = _currentCaptchaImageXpath
         .replaceAll('\\', '\\\\')
         .replaceAll("'", "\\'");
-    final escapedInputXpath =
-        _currentInputXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+    final escapedInputXpath = _currentInputXpath
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'");
 
-    final script = '''
+    final script =
+        '''
 (function() {
   window.chrome.webview.postMessage('captchaLog:CaptchaScript injected on ' + window.location.href);
 
@@ -195,12 +231,12 @@ class CaptchaWebviewWindowsImpl
     if (!_inputXpath) {
       return false;
     }
-    
+
     try {
       var inputResult = document.evaluate(_inputXpath, document, null,
         XPathResult.FIRST_ORDERED_NODE_TYPE, null);
       var inputEl = inputResult.singleNodeValue;
-      
+
       if (inputEl) {
         if (typeof \$ !== 'undefined' && \$) {
           \$(inputEl).trigger('focus');
@@ -219,9 +255,8 @@ class CaptchaWebviewWindowsImpl
     return false;
   }
 
-  // If inputXpath is provided, trigger focus to load captcha (some sites require this)
   _triggerInputFocus();
-  
+
   if (!_checkForCaptcha()) {
     _captchaPoller = setInterval(function() {
       if (_checkForCaptcha()) {
@@ -234,34 +269,40 @@ class CaptchaWebviewWindowsImpl
 ''';
 
     try {
-      await _headlessWebview?.executeScript(script);
+      await _wv?.executeScript(script);
     } catch (e) {
       KazumiLogger().e('[Captcha WebView] inject script error: $e');
     }
   }
 
   @override
-  Future<void> loadPage(String url, String captchaXpath,
-      {String? inputXpath}) async {
+  Future<void> loadPage(
+    String url,
+    String captchaXpath, {
+    String? inputXpath,
+  }) async {
     _currentCaptchaImageXpath = captchaXpath;
     _currentInputXpath = inputXpath ?? '';
     _buttonXpath = '';
     _customScript = null;
+    _customScriptGeneration++;
     buttonWasClicked = false;
     _currentPageUrl = url;
     captchaWasFound = false;
-    await _headlessWebview?.loadUrl(url);
+    await _wv?.loadUrl(url);
   }
 
   @override
   Future<void> loadPageForButtonClick(String url, String buttonXpath) async {
     _currentCaptchaImageXpath = '';
+    _currentInputXpath = '';
     _buttonXpath = buttonXpath;
     _customScript = null;
+    _customScriptGeneration++;
     buttonWasClicked = false;
     _currentPageUrl = url;
     captchaWasFound = false;
-    await _headlessWebview?.loadUrl(url);
+    await _wv?.loadUrl(url);
   }
 
   @override
@@ -270,17 +311,53 @@ class CaptchaWebviewWindowsImpl
     _currentInputXpath = '';
     _buttonXpath = '';
     _customScript = script;
+    final generation = ++_customScriptGeneration;
     buttonWasClicked = false;
     _currentPageUrl = url;
     captchaWasFound = false;
-    await _headlessWebview?.loadUrl(url);
+    await _wv?.loadUrl(url);
+    unawaited(_injectCustomScriptWhenReady(script, generation));
+  }
+
+  Future<void> _injectCustomScriptWhenReady(
+    String script,
+    int generation,
+  ) async {
+    // executeScript can fail while WebView2 is between documents. Poll briefly
+    // for a documentElement instead of waiting for navigationCompleted, which
+    // may be delayed by slow third-party resources.
+    for (var attempt = 0; attempt < 40; attempt++) {
+      if (_wv == null ||
+          _customScript != script ||
+          generation != _customScriptGeneration) {
+        return;
+      }
+      try {
+        final href = await _wv!.executeScript(
+          "document.documentElement ? window.location.href : '';",
+        );
+        final hrefText = href?.toString() ?? '';
+        if (hrefText.isNotEmpty && !hrefText.contains('about:blank')) {
+          await _injectCustomScript(script);
+          return;
+        }
+      } catch (_) {
+        // Navigation may still be swapping documents; retry shortly.
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
   }
 
   Future<void> _injectCustomScript(String script) async {
     logEventController.add('[Captcha WebView] Injecting custom script');
-    final wrappedScript = '''
+    final wrappedScript =
+        '''
 (function() {
   try {
+    if (window.__kazumiCaptchaScriptActive === true) {
+      return 'already-injected';
+    }
+    window.__kazumiCaptchaScriptActive = true;
     window.KazumiCaptcha = {
       log: function(message) {
         window.chrome.webview.postMessage('captchaLog:' + String(message));
@@ -312,19 +389,22 @@ $script
 })();
 ''';
     try {
-      final result = await _headlessWebview?.executeScript(wrappedScript);
-      logEventController
-          .add('[Captcha WebView] Custom script execute result: $result');
+      final result = await _wv?.executeScript(wrappedScript);
+      logEventController.add(
+        '[Captcha WebView] Custom script execute result: $result',
+      );
     } catch (e) {
       KazumiLogger().e('[Captcha WebView] injectCustomScript error: $e');
-      logEventController
-          .add('[Captcha WebView] Custom script inject error: $e');
+      logEventController.add(
+        '[Captcha WebView] Custom script inject error: $e',
+      );
     }
   }
 
   Future<void> _injectButtonClickScript(String buttonXpath) async {
     final escaped = buttonXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final script = '''
+    final script =
+        '''
 (function() {
   window.chrome.webview.postMessage('captchaLog:ButtonClickScript injected on ' + window.location.href);
 
@@ -374,7 +454,7 @@ $script
 })();
 ''';
     try {
-      await _headlessWebview?.executeScript(script);
+      await _wv?.executeScript(script);
     } catch (e) {
       KazumiLogger().e('[Captcha WebView] injectButtonClickScript error: $e');
     }
@@ -382,16 +462,24 @@ $script
 
   @override
   Future<void> submitCaptchaInteract(
-      String captchaCode, String inputXpath, String buttonXpath) async {
-    logEventController
-        .add('[Captcha WebView] Filling input and clicking button');
-    final escapedCode =
-        captchaCode.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final escapedInput =
-        inputXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final escapedButton =
-        buttonXpath.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-    final script = '''
+    String captchaCode,
+    String inputXpath,
+    String buttonXpath,
+  ) async {
+    logEventController.add(
+      '[Captcha WebView] Filling input and clicking button',
+    );
+    final escapedCode = captchaCode
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'");
+    final escapedInput = inputXpath
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'");
+    final escapedButton = buttonXpath
+        .replaceAll('\\', '\\\\')
+        .replaceAll("'", "\\'");
+    final script =
+        '''
 (function() {
   function evalXpath(xpath) {
     try {
@@ -422,7 +510,7 @@ $script
 })();
 ''';
     try {
-      await _headlessWebview?.executeScript(script);
+      await _wv?.executeScript(script);
     } catch (e) {
       KazumiLogger().e('[Captcha WebView] submitCaptchaInteract error: $e');
     }
@@ -431,7 +519,7 @@ $script
   @override
   Future<String> getCookieString(String pageUrl) async {
     try {
-      final result = await _headlessWebview?.getCookies(pageUrl);
+      final result = await _wv?.getCookies(pageUrl);
       return result ?? '';
     } catch (e) {
       KazumiLogger().e('[Captcha WebView] getCookieString error: $e');
@@ -442,8 +530,9 @@ $script
   @override
   Future<String> getPageHtml() async {
     try {
-      final result = await _headlessWebview?.executeScript(
-          "document.readyState === 'loading' ? '' : document.documentElement.outerHTML;");
+      final result = await _wv?.executeScript(
+        "document.documentElement ? document.documentElement.outerHTML : '';",
+      );
       return result is String ? result : '';
     } catch (e) {
       KazumiLogger().d('[Captcha WebView] getPageHtml error: $e');
@@ -454,8 +543,7 @@ $script
   @override
   Future<String> getUserAgent() async {
     try {
-      final result =
-          await _headlessWebview?.executeScript('navigator.userAgent;');
+      final result = await _wv?.executeScript('navigator.userAgent;');
       return result is String ? result : '';
     } catch (e) {
       KazumiLogger().d('[Captcha WebView] getUserAgent error: $e');
@@ -465,9 +553,14 @@ $script
 
   @override
   Future<void> unloadPage() async {
+    _currentCaptchaImageXpath = '';
+    _currentInputXpath = '';
+    _buttonXpath = '';
+    _customScript = null;
+    _customScriptGeneration++;
+    buttonWasClicked = false;
     try {
-      await _headlessWebview
-          ?.executeScript("window.location.href = 'about:blank';");
+      await _wv?.executeScript("window.location.href = 'about:blank';");
     } catch (e) {
       KazumiLogger().d('[Captcha WebView] unloadPage skipped: $e');
     }
@@ -479,6 +572,7 @@ $script
     _currentInputXpath = '';
     _buttonXpath = '';
     _customScript = null;
+    _customScriptGeneration++;
     buttonWasClicked = false;
     _currentPageUrl = '';
     for (final s in _subscriptions) {
@@ -493,8 +587,13 @@ $script
       initEventController.close();
       logEventController.close();
     } catch (_) {}
-    _headlessWebview?.dispose();
-    _headlessWebview = null;
+    final controller = webviewController;
+    webviewController = null;
+    if (controller != null) {
+      // WebviewController.dispose 为异步，且 init 失败时可能抛错；
+      // 这里不阻塞 UI，同时吞掉释放过程中的异常避免取消流程卡死。
+      unawaited(controller.dispose().then<void>((_) {}, onError: (_) {}));
+    }
   }
 
   Future<void> _setupProxy() async {

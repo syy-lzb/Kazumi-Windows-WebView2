@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -22,6 +23,7 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/plugin/captcha_verification_service.dart';
+import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/services/plugin/plugin_search_service.dart';
 import 'package:kazumi/services/plugin/rule_engine_models.dart'
     show RuleCancelToken;
@@ -61,9 +63,9 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
     );
     _captchaFlow = _SourceCaptchaFlow(
       onVerified: _showVerifiedResult,
-      onCancelled: (plugin) => _retry(plugin.name),
+      onCancelled: (plugin) => _searchService.markCaptchaRequired(plugin.name),
     );
-    _searchService.queryAllSource(_keyword);
+    _startInitialQueries();
   }
 
   @override
@@ -78,25 +80,73 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
   Plugin _pluginFor(String name) =>
       _pluginsController.pluginList.firstWhere((plugin) => plugin.name == name);
 
+  void _startInitialQueries() {
+    _searchService.prepareAllSources();
+    for (final plugin in _pluginsController.pluginList) {
+      if (_captchaFlow.canSilentHarvest(plugin)) {
+        unawaited(_runSourceQuery(plugin, _keyword));
+      } else {
+        unawaited(_searchService.querySource(_keyword, plugin.name));
+      }
+    }
+  }
+
   void _querySource(String keyword, String pluginName) {
     final trimmed = keyword.trim();
     if (!mounted || trimmed.isEmpty) return;
     setState(() => _sourceKeywords[pluginName] = trimmed);
-    _searchService.querySource(trimmed, pluginName);
+    final plugin = _pluginFor(pluginName);
+    unawaited(_runSourceQuery(plugin, trimmed));
+  }
+
+  Future<void> _runSourceQuery(Plugin plugin, String keyword) async {
+    if (_captchaFlow.canSilentHarvest(plugin)) {
+      _searchService.prepareExternalSearch(plugin.name);
+      final pageHtml = await _captchaFlow.trySilentHarvest(plugin, keyword);
+      if (!mounted) return;
+
+      if (pageHtml != null &&
+          _applyHarvestedResult(plugin, pageHtml, showToast: false)) {
+        return;
+      }
+
+      // The background WebView did not reach a real result page. This is the
+      // point where a fresh Cloudflare challenge is likely; expose the same
+      // browser session instead of falling back to Dio.
+      _searchService.markCaptchaRequired(plugin.name);
+      _captchaFlow.start(plugin, keyword);
+      return;
+    }
+
+    await _searchService.querySource(keyword, plugin.name);
   }
 
   void _retry(String name) => _querySource(_keywordFor(name), name);
 
-  void _showVerifiedResult(Plugin plugin, String pageHtml) {
-    if (!mounted) return;
-    if (_searchService.applyHarvestedSearchResult(plugin.name, pageHtml)) {
+  bool _applyHarvestedResult(
+    Plugin plugin,
+    String pageHtml, {
+    required bool showToast,
+  }) {
+    if (!mounted) return false;
+    if (!_searchService.applyHarvestedSearchResult(plugin.name, pageHtml)) {
+      return false;
+    }
+    if (showToast) {
       KazumiDialog.showToast(message: '验证成功');
+    }
+    return true;
+  }
+
+  void _showVerifiedResult(Plugin plugin, String pageHtml) {
+    if (_applyHarvestedResult(plugin, pageHtml, showToast: true)) {
       return;
     }
-    _captchaFlow.showSuccess(
-      plugin.name,
-      onComplete: () => _retry(plugin.name),
-    );
+
+    // Do not re-request the same page through Dio here. For protected sites
+    // that simply produces another 403 -> captcha loop.
+    _searchService.markSearchError(plugin.name);
+    KazumiDialog.showToast(message: '验证完成，但未能解析检索页面');
   }
 
   Future<void> _openInBrowser(String name) async {
@@ -108,8 +158,10 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
             Uri.encodeQueryComponent(_keywordFor(name)),
           );
     try {
-      if (await launchUrl(Uri.parse(targetUrl),
-          mode: LaunchMode.externalApplication)) {
+      if (await launchUrl(
+        Uri.parse(targetUrl),
+        mode: LaunchMode.externalApplication,
+      )) {
         return;
       }
     } catch (error) {
@@ -121,17 +173,21 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
   Future<void> _openSearchItem(String name, SearchItem searchItem) async {
     if (dialogs.isRunning) return;
     final plugin = _pluginFor(name);
-    await dialogs.run((task) async {
-      final cancelToken = RuleCancelToken();
-      final roads = await task.loading(
-        message: '正在获取播放列表',
-        barrierDismissible: isDesktop(),
-        onCancel: cancelToken.cancel,
-        action: () =>
-            plugin.queryChapterRoads(searchItem.src, cancelToken: cancelToken),
-      );
-      if (roads.isEmpty) throw ChapterErrorException(plugin.name);
-      task.withContext((context) => context.pushNamed(
+    await dialogs.run(
+      (task) async {
+        final cancelToken = RuleCancelToken();
+        final roads = await task.loading(
+          message: '正在获取播放列表',
+          barrierDismissible: isDesktop(),
+          onCancel: cancelToken.cancel,
+          action: () => plugin.queryChapterRoads(
+            searchItem.src,
+            cancelToken: cancelToken,
+          ),
+        );
+        if (roads.isEmpty) throw ChapterErrorException(plugin.name);
+        task.withContext(
+          (context) => context.pushNamed(
             '/video/',
             arguments: OnlineVideoPlaybackArgs(
               bangumiItem: widget.infoController.bangumiItem,
@@ -140,11 +196,14 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
               src: searchItem.src,
               roads: roads,
             ),
-          ));
-    }, onError: (error, stackTrace) {
-      KazumiLogger().w('SourceSheet: failed to query playlist', error: error);
-      KazumiDialog.showToast(message: '未能获取播放列表，请重试或选择其他结果');
-    });
+          ),
+        );
+      },
+      onError: (error, stackTrace) {
+        KazumiLogger().w('SourceSheet: failed to query playlist', error: error);
+        KazumiDialog.showToast(message: '未能获取播放列表，请重试或选择其他结果');
+      },
+    );
   }
 
   void _showAliasPicker(String pluginName) {
@@ -156,64 +215,65 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
       sourceName: pluginName,
       aliases: widget.infoController.bangumiItem.alias,
       onAliasSelected: (alias) => _querySource(alias, pluginName),
-      onAliasesChanged: () => _collectController
-          .updateLocalCollect(widget.infoController.bangumiItem),
+      onAliasesChanged: () => _collectController.updateLocalCollect(
+        widget.infoController.bangumiItem,
+      ),
     );
   }
 
   void _showCustomKeyword(String pluginName) => _showCustomKeywordDialog(
-        initialKeyword: _keywordFor(pluginName),
-        sourceName: pluginName,
-        onSubmit: (keyword) {
-          final item = widget.infoController.bangumiItem;
-          if (!item.alias.contains(keyword)) {
-            item.alias.add(keyword);
-            _collectController.updateLocalCollect(item);
-          }
-          _querySource(keyword, pluginName);
-        },
-      );
+    initialKeyword: _keywordFor(pluginName),
+    sourceName: pluginName,
+    onSubmit: (keyword) {
+      final item = widget.infoController.bangumiItem;
+      if (!item.alias.contains(keyword)) {
+        item.alias.add(keyword);
+        _collectController.updateLocalCollect(item);
+      }
+      _querySource(keyword, pluginName);
+    },
+  );
 
   @override
   Widget build(BuildContext context) => Observer(
-        builder: (context) {
-          // Snapshot observable values here; lazy list builders are not tracked.
-          final groupsByName = {
-            for (final plugin in _pluginsController.pluginList)
-              plugin.name: _SourceSearchGroup(
-                name: plugin.name,
-                keyword: _keywordFor(plugin.name),
-                status: widget.infoController.pluginSearchStatus[plugin.name] ??
-                    PluginSearchStatus.pending,
-                results: <SearchItem>[],
-              ),
-          };
-          final seenBySource = <String, Set<String>>{};
-          String? firstResultSource;
-          // Responses follow completion order; groups keep configured order.
-          for (final response
-              in widget.infoController.pluginSearchResponseList) {
-            final group = groupsByName[response.pluginName];
-            if (group == null) continue;
-            final seen = seenBySource.putIfAbsent(group.name, () => <String>{});
-            for (final result in response.data) {
-              if (seen.add(result.src)) group.results.add(result);
-            }
-            if (group.hasResults) firstResultSource ??= group.name;
-          }
-          return _SourceSheetView(
-            keyword: _keyword,
-            groups: groupsByName.values.toList(),
-            firstResultSource: firstResultSource,
-            onSourceSearch: _showCustomKeyword,
-            onSourceAliasSearch: _showAliasPicker,
-            onRetry: _retry,
-            onVerify: (name) =>
-                _captchaFlow.start(_pluginFor(name), _keywordFor(name)),
-            onOpenBrowser: _openInBrowser,
-            onPlay: _openSearchItem,
-            onClose: () => Navigator.of(context).pop(),
-          );
-        },
+    builder: (context) {
+      // Snapshot observable values here; lazy list builders are not tracked.
+      final groupsByName = {
+        for (final plugin in _pluginsController.pluginList)
+          plugin.name: _SourceSearchGroup(
+            name: plugin.name,
+            keyword: _keywordFor(plugin.name),
+            status:
+                widget.infoController.pluginSearchStatus[plugin.name] ??
+                PluginSearchStatus.pending,
+            results: <SearchItem>[],
+          ),
+      };
+      final seenBySource = <String, Set<String>>{};
+      String? firstResultSource;
+      // Responses follow completion order; groups keep configured order.
+      for (final response in widget.infoController.pluginSearchResponseList) {
+        final group = groupsByName[response.pluginName];
+        if (group == null) continue;
+        final seen = seenBySource.putIfAbsent(group.name, () => <String>{});
+        for (final result in response.data) {
+          if (seen.add(result.src)) group.results.add(result);
+        }
+        if (group.hasResults) firstResultSource ??= group.name;
+      }
+      return _SourceSheetView(
+        keyword: _keyword,
+        groups: groupsByName.values.toList(),
+        firstResultSource: firstResultSource,
+        onSourceSearch: _showCustomKeyword,
+        onSourceAliasSearch: _showAliasPicker,
+        onRetry: _retry,
+        onVerify: (name) =>
+            _captchaFlow.start(_pluginFor(name), _keywordFor(name)),
+        onOpenBrowser: _openInBrowser,
+        onPlay: _openSearchItem,
+        onClose: () => Navigator.of(context).pop(),
       );
+    },
+  );
 }

@@ -391,10 +391,11 @@ packages:
   ech_http:
     dependency: "direct main"
     description:
-      name: ech_http
-      sha256: "0fb7ae7fcc44e4a015e2b19a98c04d72cf65079467d61c1142c22fdc21fc4d2d"
-      url: "https://pub.dev"
-    source: hosted
+      path: "."
+      ref: "8a0077271605774f75f05170225ebcc82352d361"
+      resolved-ref: "8a0077271605774f75f05170225ebcc82352d361"
+      url: "https://github.com/syy-lzb/ech_http.git"
+    source: git
     version: "0.2.1"
   equatable:
     dependency: transitive
@@ -980,18 +981,18 @@ packages:
     dependency: "direct main"
     description:
       path: media_kit
-      ref: "803c4a27912091db6f839d48d1b984a0d9f588c7"
-      resolved-ref: "803c4a27912091db6f839d48d1b984a0d9f588c7"
-      url: "https://github.com/Predidit/media-kit.git"
+      ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
+      resolved-ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
+      url: "https://github.com/syy-lzb/media-kit.git"
     source: git
     version: "1.1.11"
   media_kit_video:
     dependency: "direct main"
     description:
       path: media_kit_video
-      ref: "803c4a27912091db6f839d48d1b984a0d9f588c7"
-      resolved-ref: "803c4a27912091db6f839d48d1b984a0d9f588c7"
-      url: "https://github.com/Predidit/media-kit.git"
+      ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
+      resolved-ref: f7ac8bc029c0d29dca1b170c2322ec555ac60b40
+      url: "https://github.com/syy-lzb/media-kit.git"
     source: git
     version: "1.2.5"
   menu_base:
@@ -1843,9 +1844,9 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "2b3306d2bfb9f22cbb328743b60e547cf50f0c3c"
-      resolved-ref: "2b3306d2bfb9f22cbb328743b60e547cf50f0c3c"
-      url: "https://github.com/Predidit/flutter-webview-windows.git"
+      ref: "04786a4df07cfd7fa3496f01b14699e60055dba9"
+      resolved-ref: "04786a4df07cfd7fa3496f01b14699e60055dba9"
+      url: "https://github.com/syy-lzb/flutter-webview-windows.git"
     source: git
     version: "0.4.0"
   win32:

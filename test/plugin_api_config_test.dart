@@ -13,6 +13,24 @@ void main() {
     expect(plugin.chapterMode, RuleMode.xpath);
   });
 
+  for (final source in [
+    'https://hanime1.me/watch?v=407947',
+    '/watch?v=407947',
+  ]) {
+    test('@self exposes watch URL without a chapter request: $source', () async {
+      final plugin = Plugin.fromJson({
+        ..._legacyRule,
+        'baseURL': 'https://hanime1.me/',
+        'chapterRoads': '@self',
+        'chapterResult': '@self',
+      });
+      final roads = await plugin.queryChapterRoads(source);
+      expect(roads, hasLength(1));
+      expect(roads.single.data, ['https://hanime1.me/watch?v=407947']);
+      expect(roads.single.identifier, ['第1集']);
+    });
+  }
+
   test('legacy XPath POST setting survives JSON round trip', () {
     final plugin = Plugin.fromJson({..._legacyRule, 'usePost': true});
     final restored = Plugin.fromJson(plugin.toJson());

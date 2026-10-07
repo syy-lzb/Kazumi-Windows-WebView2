@@ -250,7 +250,7 @@ void main() {
     final engine = RuleEngine(
       requestExecutor: _FakeExecutor(
         const [],
-        error: _badResponse('<html>forbidden</html>'),
+        error: _badResponse('<html>server error</html>', statusCode: 500),
       ),
       logFailures: false,
     );
@@ -266,6 +266,42 @@ void main() {
       ),
       throwsA(isA<SearchErrorException>()),
     );
+  });
+
+  for (final statusCode in [403, 429, 503]) {
+    test('protected XPath HTTP $statusCode opens verification without markers',
+        () async {
+      final engine = RuleEngine(
+        requestExecutor: _FakeExecutor(
+          const [],
+          error: _badResponse('', statusCode: statusCode),
+        ),
+        logFailures: false,
+      );
+      await expectLater(
+        engine.search(
+          _config(
+            searchMode: RuleMode.xpath,
+            chapterMode: RuleMode.xpath,
+            antiCrawler: _antiCrawler(),
+          ),
+          'keyword',
+        ),
+        throwsA(isA<CaptchaRequiredException>()),
+      );
+    });
+  }
+
+  test('empty harvested results do not require another HTTP search', () {
+    final executor = _FakeExecutor(const [], error: StateError('HTTP blocked'));
+    final engine = RuleEngine(requestExecutor: executor, logFailures: false);
+    final response = engine.tryParseHarvestedSearch(
+      _config(searchMode: RuleMode.xpath, chapterMode: RuleMode.xpath),
+      '<html><body>No matching videos</body></html>',
+    );
+    expect(response, isNotNull);
+    expect(response!.data, isEmpty);
+    expect(executor.requests, isEmpty);
   });
 
   test('API search does not turn failed challenge response into captcha flow',

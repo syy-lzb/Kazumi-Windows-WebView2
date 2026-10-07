@@ -73,9 +73,9 @@ class Plugin {
     ApiSearchConfig? searchApiConfig,
     ApiChapterConfig? chapterApiConfig,
     AntiCrawlerConfig? antiCrawlerConfig,
-  })  : searchApiConfig = searchApiConfig ?? ApiSearchConfig(),
-        chapterApiConfig = chapterApiConfig ?? ApiChapterConfig(),
-        antiCrawlerConfig = antiCrawlerConfig ?? AntiCrawlerConfig.empty();
+  }) : searchApiConfig = searchApiConfig ?? ApiSearchConfig(),
+       chapterApiConfig = chapterApiConfig ?? ApiChapterConfig(),
+       antiCrawlerConfig = antiCrawlerConfig ?? AntiCrawlerConfig.empty();
 
   factory Plugin.fromJson(Map<String, dynamic> json) {
     return Plugin(
@@ -186,21 +186,21 @@ class Plugin {
   bool get requiresNewerClient => int.parse(api) > ApiEndpoints.apiLevel;
 
   RuleExecutionConfig get _executionConfig => RuleExecutionConfig(
-        pluginName: name,
-        baseUrl: baseUrl,
-        usePost: usePost,
-        searchMode: searchMode,
-        chapterMode: chapterMode,
-        searchUrl: searchURL,
-        searchList: searchList,
-        searchName: searchName,
-        searchResult: searchResult,
-        chapterRoads: chapterRoads,
-        chapterResult: chapterResult,
-        searchApiConfig: searchApiConfig,
-        chapterApiConfig: chapterApiConfig,
-        antiCrawlerConfig: antiCrawlerConfig,
-      );
+    pluginName: name,
+    baseUrl: baseUrl,
+    usePost: usePost,
+    searchMode: searchMode,
+    chapterMode: chapterMode,
+    searchUrl: searchURL,
+    searchList: searchList,
+    searchName: searchName,
+    searchResult: searchResult,
+    chapterRoads: chapterRoads,
+    chapterResult: chapterResult,
+    searchApiConfig: searchApiConfig,
+    chapterApiConfig: chapterApiConfig,
+    antiCrawlerConfig: antiCrawlerConfig,
+  );
 
   Future<RuleSearchTrace> traceSearch(
     String keyword, {
@@ -252,6 +252,29 @@ class Plugin {
     String source, {
     RuleCancelToken? cancelToken,
   }) async {
+    // Some search rules already return the final episode/watch page.
+    // "@self" is an explicit rule-side opt-in that skips the chapter HTTP
+    // request and exposes the search result itself as a one-item road.
+    //
+    // This is especially useful for sites whose anti-bot clearance is bound
+    // to the WebView/browser fingerprint and therefore cannot be replayed by
+    // the Dart HTTP client.
+    final directEpisode =
+        chapterMode == RuleMode.xpath &&
+        chapterRoads.trim() == '@self' &&
+        chapterResult.trim() == '@self';
+
+    if (directEpisode) {
+      final episodeUrl = buildFullUrl(source);
+      return <Road>[
+        Road(
+          name: '播放线路1',
+          data: <String>[episodeUrl],
+          identifier: <String>['第1集'],
+        ),
+      ];
+    }
+
     return (await traceChapters(source, cancelToken: cancelToken)).roads;
   }
 

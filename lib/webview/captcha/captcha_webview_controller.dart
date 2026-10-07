@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:kazumi/webview/captcha/impl/captcha_webview_inappwebview_impl.dart';
 import 'package:kazumi/webview/captcha/impl/captcha_webview_windows_impl.dart';
 import 'package:kazumi/webview/captcha/impl/captcha_webview_linux_impl.dart';
@@ -67,7 +68,10 @@ abstract class CaptchaWebviewController<T> {
   /// [inputXpath]  验证码输入框元素的 XPath
   /// [buttonXpath] 提交按钮元素的 XPath
   Future<void> submitCaptchaInteract(
-      String captchaCode, String inputXpath, String buttonXpath);
+    String captchaCode,
+    String inputXpath,
+    String buttonXpath,
+  );
 
   /// 获取当前页面的 Cookie 字符串（"key1=val1; key2=val2"）
   ///
@@ -88,6 +92,12 @@ abstract class CaptchaWebviewController<T> {
 
   /// 释放 WebView 资源
   void dispose();
+
+  /// 可选的可交互验证视图（如 Windows WebView2）。
+  ///
+  /// 仅在需要用户人工完成验证（例如 Cloudflare challenge）时嵌入对话框。
+  /// 不支持可见视图的平台返回 null，保持原有无界面流程。
+  Widget? buildVerificationView() => null;
 }
 
 class CaptchaWebviewControllerFactory {

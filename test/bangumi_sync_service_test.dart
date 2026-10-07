@@ -9,6 +9,7 @@ import 'package:hive_ce/hive.dart';
 import 'package:kazumi/pages/collect/collect_controller.dart';
 import 'package:kazumi/repositories/collect_crud_repository.dart';
 import 'package:kazumi/request/clients/bangumi_client.dart';
+import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/request/core/dio_factory.dart';
 import 'package:kazumi/request/core/network_exception.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -80,6 +81,42 @@ void main() {
     expect(
         adapter.requests.single.headers['Authorization'], 'Bearer saved-token');
     expect(GStorage.getSetting(SettingsKeys.bangumiSyncEnable), isTrue);
+  });
+
+  test('plain keyword search includes a subject missing from v0 search', () async {
+    adapter.respond = (request) async => request.method == 'GET'
+        ? _json({'results': 1, 'list': [_legacySubject()]})
+        : _json({'data': []});
+    final page = await BangumiApi.bangumiSearch('鬼父');
+    expect(page, isNotNull);
+    expect(page!.items.map((item) => item.id), contains(33504));
+    expect(page.items.single.rank, 4714);
+    expect(page.items.single.airDate, '2009-10-30');
+  });
+
+  test('legacy paging advances a full source page despite missing entries', () async {
+    adapter.respond = (request) async => request.method == 'GET'
+        ? _json({'results': 25, 'list': [_legacySubject()]})
+        : _json({'data': []});
+    final page = await BangumiApi.bangumiSearch('鬼父');
+    expect(page!.rawCount, 20);
+  });
+
+  test('advanced search retains the v0 tag filter', () async {
+    adapter.respond = (_) async => _json({'data': []});
+    await BangumiApi.bangumiSearch('keyword', tags: ['OVA']);
+    expect(adapter.requests.single.method, 'POST');
+    expect(adapter.requests.single.uri.path, '/v0/search/subjects');
+    final body = adapter.requests.single.data as Map<String, dynamic>;
+    expect((body['filter'] as Map)['tag'], ['OVA']);
+  });
+
+  test('unavailable legacy search falls back to v0 results', () async {
+    adapter.respond = (request) async => request.method == 'GET'
+        ? _json({'error': 'unavailable'}, status: 503)
+        : _json({'data': [_legacySubject()]});
+    final page = await BangumiApi.bangumiSearch('keyword');
+    expect(page!.items.map((item) => item.id), contains(33504));
   });
 
   test('ECH image acceleration preserves Bangumi API mirror routing', () async {
@@ -270,6 +307,21 @@ ResponseBody _user([String username = 'saved-user']) => _json({
       'username': username,
       'avatar': <String, String>{},
     });
+
+Map<String, dynamic> _legacySubject() => {
+      'id': 33504,
+      'type': 2,
+      'name': '鬼父',
+      'name_cn': '鬼父',
+      'air_date': '2009-10-30',
+      'rank': 4714,
+      'images': {'large': 'https://example.com/cover.jpg'},
+      'rating': {
+        'score': 6.0,
+        'total': 1,
+        'count': {for (var i = 1; i <= 10; i++) '$i': 0},
+      },
+    };
 
 class _BangumiAdapter implements HttpClientAdapter {
   final requests = <RequestOptions>[];
