@@ -5,6 +5,7 @@ import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/plugin/rule_engine_models.dart';
 import 'package:kazumi/utils/async_session.dart';
+import 'package:kazumi/services/plugin/source_search_relevance.dart';
 
 class PluginSearchService {
   PluginSearchService({
@@ -20,6 +21,17 @@ class PluginSearchService {
   /// invalidates the write-back of the still-running previous one.
   final Map<String, AsyncSessionOwner> _querySessions = {};
   bool _isCancelled = false;
+  final _adaptiveSearch = AdaptiveSourceSearch();
+  final _targetKeywords = <String, String>{};
+
+  List<String> _aliasesFor(String keyword) {
+    final item = infoController.bangumiItem;
+    final primary = item.nameCn.isEmpty ? item.name : item.nameCn;
+    // 用户手动改词后不再拿原条目的别名扩大搜索范围。
+    return keyword.trim() == primary.trim()
+        ? [item.name, item.nameCn, ...item.alias]
+        : [];
+  }
 
   /// Prepares a source for a result that will be supplied by an external
   /// transport (for example a verified WebView2 session).
@@ -51,11 +63,16 @@ class PluginSearchService {
     }
   }
 
-  Future<void> querySource(String keyword, String pluginName) async {
+  Future<void> querySource(String keyword, String pluginName, {
+    Future<PluginSearchResponse> Function(String keyword)? fetch,
+    PluginSearchResponse? initialResponse,
+    bool refresh = false,
+  }) async {
     for (final plugin in pluginsController.pluginList) {
       if (plugin.name == pluginName) {
         prepareExternalSearch(pluginName);
-        await _queryPlugin(plugin, keyword);
+        if (refresh) _adaptiveSearch.clear(pluginName);
+        await _queryPlugin(plugin, keyword, fetch: fetch, initialResponse: initialResponse);
         return;
       }
     }
@@ -71,6 +88,10 @@ class PluginSearchService {
       if (plugin.name != pluginName) continue;
       final result = plugin.parseHarvestedSearch(html);
       if (result == null) return false;
+      final keyword = _targetKeywords[pluginName] ??
+          (infoController.bangumiItem.nameCn.isEmpty
+              ? infoController.bangumiItem.name : infoController.bangumiItem.nameCn);
+      result.data = rankSourceResults(keyword, result.data, aliases: _aliasesFor(keyword));
       infoController.pluginSearchResponseList.removeWhere(
         (response) => response.pluginName == pluginName,
       );
@@ -97,24 +118,37 @@ class PluginSearchService {
     await Future.wait(plugins.map((plugin) => _queryPlugin(plugin, keyword)));
   }
 
-  Future<void> _queryPlugin(Plugin plugin, String keyword) async {
+  Future<void> _queryPlugin(Plugin plugin, String keyword, {
+    Future<PluginSearchResponse> Function(String keyword)? fetch,
+    PluginSearchResponse? initialResponse,
+  }) async {
     if (_isCancelled) return;
     final session = _querySessions
         .putIfAbsent(plugin.name, AsyncSessionOwner.new)
         .begin();
+    _targetKeywords[plugin.name] = keyword;
     try {
-      final result = await plugin.queryBangumi(
-        keyword,
-        shouldRethrow: true,
-        cancelToken: _cancelToken,
+      await _adaptiveSearch.search(
+        sourceName: plugin.name,
+        keyword: keyword,
+        aliases: _aliasesFor(keyword),
+        initialResponse: initialResponse,
+        isCurrent: () => !_isCancelled && !session.isStale,
+        fetch: fetch ?? (word) => plugin.queryBangumi(
+          word, shouldRethrow: true, cancelToken: _cancelToken),
+        onUpdate: (items, complete) {
+          infoController.pluginSearchResponseList.removeWhere(
+            (response) => response.pluginName == plugin.name);
+          if (items.isNotEmpty) {
+            pluginsController.validityTracker.markSearchValid(plugin.name);
+            infoController.pluginSearchResponseList.add(
+              PluginSearchResponse(pluginName: plugin.name, data: items));
+          }
+          infoController.pluginSearchStatus[plugin.name] = items.isNotEmpty
+              ? PluginSearchStatus.success
+              : (complete ? PluginSearchStatus.noResult : PluginSearchStatus.pending);
+        },
       );
-      if (_isCancelled || session.isStale) return;
-      infoController.pluginSearchStatus[plugin.name] =
-          PluginSearchStatus.success;
-      if (result.data.isNotEmpty) {
-        pluginsController.validityTracker.markSearchValid(plugin.name);
-      }
-      infoController.pluginSearchResponseList.add(result);
     } catch (error) {
       if (_isCancelled || session.isStale) return;
       _handleSearchError(plugin, error);

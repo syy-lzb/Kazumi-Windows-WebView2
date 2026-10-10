@@ -248,24 +248,57 @@ class Plugin {
     }
   }
 
+  bool get usesDirectEpisode =>
+      chapterMode == RuleMode.xpath &&
+      chapterRoads.trim() == '@self' &&
+      chapterResult.trim() == '@self';
+
   Future<List<Road>> queryChapterRoads(
     String source, {
     RuleCancelToken? cancelToken,
+    SearchItem? selectedResult,
+    Iterable<SearchItem> searchResults = const [],
   }) async {
     // Some search rules already return the final episode/watch page.
     // "@self" is an explicit rule-side opt-in that skips the chapter HTTP
-    // request and exposes the search result itself as a one-item road.
+    // request. Matching numbered search results can form the episode list;
+    // without search context the result remains a one-item road.
     //
     // This is especially useful for sites whose anti-bot clearance is bound
     // to the WebView/browser fingerprint and therefore cannot be replayed by
     // the Dart HTTP client.
-    final directEpisode =
-        chapterMode == RuleMode.xpath &&
-        chapterRoads.trim() == '@self' &&
-        chapterResult.trim() == '@self';
-
-    if (directEpisode) {
+    if (usesDirectEpisode) {
       final episodeUrl = buildFullUrl(source);
+      final selected = selectedResult;
+      if (selected != null) {
+        final selectedTitle = _numberedEpisodeTitle(selected.name);
+        final episodes = <({String url, String label, int number})>[];
+        final seen = <String>{};
+        for (final item in [selected, ...searchResults]) {
+          final title = _numberedEpisodeTitle(item.name);
+          final url = buildFullUrl(item.src);
+          if (url != episodeUrl &&
+              (selectedTitle == null ||
+                  title == null ||
+                  title.series != selectedTitle.series)) {
+            continue;
+          }
+          if (!seen.add(url)) continue;
+          episodes.add((
+            url: url,
+            label: title == null ? item.name : '第${title.number}集',
+            number: title?.number ?? 1,
+          ));
+        }
+        episodes.sort((a, b) => a.number.compareTo(b.number));
+        return [
+          Road(
+            name: '播放线路1',
+            data: episodes.map((item) => item.url).toList(),
+            identifier: episodes.map((item) => item.label).toList(),
+          ),
+        ];
+      }
       return <Road>[
         Road(
           name: '播放线路1',
@@ -289,4 +322,17 @@ class Plugin {
       if (referer.isNotEmpty) 'referer': referer,
     };
   }
+}
+
+/// 只识别明确的集数后缀，不用模糊匹配合并相似作品。
+({String series, int number})? _numberedEpisodeTitle(String name) {
+  final normalized = name.trim().replaceAll(RegExp(r'\s+'), ' ');
+  final match =
+      RegExp(r'^(.*?)\s*第\s*([0-9]+)\s*[集話话]$').firstMatch(normalized) ??
+      RegExp(r'^(.*?)\s+([0-9]+)$').firstMatch(normalized);
+  if (match == null) return null;
+  final series = match.group(1)!.trim();
+  final number = int.tryParse(match.group(2)!);
+  if (series.isEmpty || number == null || number <= 0) return null;
+  return (series: series, number: number);
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:kazumi/bean/appbar/window_minimize_button.dart';
 
 import 'package:canvas_danmaku/models/danmaku_content_item.dart';
 import 'package:flutter/material.dart';
@@ -166,7 +167,9 @@ class _VideoPageState extends State<VideoPage>
     var progress = historyController.lastWatching(
         videoPageController.bangumiItem,
         videoPageController.currentPlugin.name);
-    if (progress != null) {
+    final args = widget.args as OnlineVideoPlaybackArgs;
+    if (progress != null &&
+        args.canResumeEpisode(progress.episode, progress.road)) {
       if (videoPageController.roadList.length > progress.road) {
         if (videoPageController.roadList[progress.road].data.length >=
             progress.episode) {
@@ -428,6 +431,8 @@ class _VideoPageState extends State<VideoPage>
                           const Expanded(
                               child: dtb.DragToMoveArea(
                                   child: SizedBox(height: 40))),
+                          if (isDesktop())
+                            const WindowMinimizeButton(color: Colors.white),
                           IconButton(
                             icon: const Icon(Icons.refresh_outlined,
                                 color: Colors.white),

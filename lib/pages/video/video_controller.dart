@@ -164,6 +164,9 @@ abstract class _VideoPageController with Store implements Disposable {
         src = args.src;
         roadList.clear();
         roadList.addAll(args.roads);
+        if (args.initialEpisode case final int episode) {
+          resetEpisodeState(episode: episode);
+        }
       case OfflineVideoPlaybackArgs():
         _initForOfflinePlayback(
           bangumiItem: args.bangumiItem,

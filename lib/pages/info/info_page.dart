@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:kazumi/bean/appbar/window_minimize_button.dart';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -353,6 +354,8 @@ class _InfoPageState extends State<InfoPage>
                       bangumiItem: infoController.bangumiItem,
                     ),
                   ),
+                  if (isDesktop() && !showWindowButton)
+                    const WindowMinimizeButton(),
                   if (isDesktop() && !showWindowButton)
                     CloseButton(onPressed: () => windowManager.close()),
                   SizedBox(width: 8),

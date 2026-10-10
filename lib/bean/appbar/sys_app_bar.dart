@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:kazumi/bean/appbar/window_minimize_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_modular/flutter_modular.dart';
@@ -31,6 +32,7 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
     final appBarActions = <Widget>[...?actions];
     if (desktop) {
       if (!DesktopWindowConfig.showWindowButton) {
+        appBarActions.add(const WindowMinimizeButton());
         appBarActions.add(CloseButton(onPressed: () => windowManager.close()));
       }
       appBarActions.add(const SizedBox(width: 8));

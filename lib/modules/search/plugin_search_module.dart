@@ -4,10 +4,12 @@ enum PluginSearchStatus { pending, success, error, noResult, captcha }
 class SearchItem {
   String name;
   String src;
+  final double relevance;
 
   SearchItem({
     required this.name,
     required this.src,
+    this.relevance = 1,
   });
 
   factory SearchItem.fromJson(Map<String, dynamic> json) {

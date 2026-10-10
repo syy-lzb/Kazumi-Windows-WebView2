@@ -25,6 +25,7 @@ import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/plugin/captcha_verification_service.dart';
 import 'package:kazumi/services/plugin/plugin_cookie_manager.dart';
 import 'package:kazumi/services/plugin/plugin_search_service.dart';
+import 'package:kazumi/services/plugin/source_search_relevance.dart';
 import 'package:kazumi/services/plugin/rule_engine_models.dart'
     show RuleCancelToken;
 import 'package:kazumi/utils/device.dart';
@@ -47,6 +48,8 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
   final CollectController _collectController = inject<CollectController>();
   final PluginsController _pluginsController = inject<PluginsController>();
   final Map<String, String> _sourceKeywords = {};
+  final Map<String, int> _sourceQueryGenerations = {};
+  final Map<String, String> _verificationTargets = {};
 
   late final String _keyword;
   late final PluginSearchService _searchService;
@@ -83,11 +86,7 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
   void _startInitialQueries() {
     _searchService.prepareAllSources();
     for (final plugin in _pluginsController.pluginList) {
-      if (_captchaFlow.canSilentHarvest(plugin)) {
-        unawaited(_runSourceQuery(plugin, _keyword));
-      } else {
-        unawaited(_searchService.querySource(_keyword, plugin.name));
-      }
+      unawaited(_runSourceQuery(plugin, _keyword));
     }
   }
 
@@ -99,29 +98,35 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
     unawaited(_runSourceQuery(plugin, trimmed));
   }
 
-  Future<void> _runSourceQuery(Plugin plugin, String keyword) async {
-    if (_captchaFlow.canSilentHarvest(plugin)) {
-      _searchService.prepareExternalSearch(plugin.name);
-      final pageHtml = await _captchaFlow.trySilentHarvest(plugin, keyword);
-      if (!mounted) return;
-
-      if (pageHtml != null &&
-          _applyHarvestedResult(plugin, pageHtml, showToast: false)) {
-        return;
-      }
-
-      // The background WebView did not reach a real result page. This is the
-      // point where a fresh Cloudflare challenge is likely; expose the same
-      // browser session instead of falling back to Dio.
-      _searchService.markCaptchaRequired(plugin.name);
-      _captchaFlow.start(plugin, keyword);
-      return;
+  Future<void> _runSourceQuery(Plugin plugin, String keyword, {
+    PluginSearchResponse? initialResponse,
+    bool refresh = false,
+  }) async {
+    final generation = (_sourceQueryGenerations[plugin.name] ?? 0) + 1;
+    _sourceQueryGenerations[plugin.name] = generation;
+    final silent = _captchaFlow.canSilentHarvest(plugin);
+    var lastKeyword = keyword;
+    await _searchService.querySource(keyword, plugin.name,
+      refresh: refresh,
+      initialResponse: initialResponse,
+      fetch: silent ? (word) async {
+        lastKeyword = word;
+        final html = await _captchaFlow.trySilentHarvest(plugin, word);
+        if (html == null) throw CaptchaRequiredException(plugin.name);
+        final result = plugin.parseHarvestedSearch(html);
+        if (result == null) throw CaptchaRequiredException(plugin.name);
+        return result;
+      } : null,
+    );
+    if (!mounted || _sourceQueryGenerations[plugin.name] != generation) return;
+    if (silent && widget.infoController.pluginSearchStatus[plugin.name] == PluginSearchStatus.captcha) {
+      _verificationTargets[plugin.name] = keyword;
+      _captchaFlow.start(plugin, lastKeyword);
     }
-
-    await _searchService.querySource(keyword, plugin.name);
   }
 
-  void _retry(String name) => _querySource(_keywordFor(name), name);
+  void _retry(String name) => unawaited(
+    _runSourceQuery(_pluginFor(name), _keywordFor(name), refresh: true));
 
   bool _applyHarvestedResult(
     Plugin plugin,
@@ -139,7 +144,13 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
   }
 
   void _showVerifiedResult(Plugin plugin, String pageHtml) {
+    final target = _verificationTargets.remove(plugin.name);
+    if (target != null && target != _keywordFor(plugin.name)) return;
     if (_applyHarvestedResult(plugin, pageHtml, showToast: true)) {
+      final response = widget.infoController.pluginSearchResponseList
+          .where((response) => response.pluginName == plugin.name).firstOrNull;
+      unawaited(_runSourceQuery(plugin, _keywordFor(plugin.name),
+        initialResponse: response ?? PluginSearchResponse(pluginName: plugin.name, data: [])));
       return;
     }
 
@@ -183,6 +194,10 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
           action: () => plugin.queryChapterRoads(
             searchItem.src,
             cancelToken: cancelToken,
+            selectedResult: searchItem,
+            searchResults: widget.infoController.pluginSearchResponseList
+                .where((response) => response.pluginName == name)
+                .expand((response) => response.data),
           ),
         );
         if (roads.isEmpty) throw ChapterErrorException(plugin.name);
@@ -195,6 +210,7 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
               title: searchItem.name,
               src: searchItem.src,
               roads: roads,
+              startAtSource: plugin.usesDirectEpisode,
             ),
           ),
         );
@@ -268,8 +284,10 @@ class _SourceSheetState extends State<SourceSheet> with KazumiDialogOwner {
         onSourceSearch: _showCustomKeyword,
         onSourceAliasSearch: _showAliasPicker,
         onRetry: _retry,
-        onVerify: (name) =>
-            _captchaFlow.start(_pluginFor(name), _keywordFor(name)),
+        onVerify: (name) {
+          _verificationTargets[name] = _keywordFor(name);
+          _captchaFlow.start(_pluginFor(name), _keywordFor(name));
+        },
         onOpenBrowser: _openInBrowser,
         onPlay: _openSearchItem,
         onClose: () => Navigator.of(context).pop(),

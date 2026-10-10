@@ -27,6 +27,7 @@ import 'package:kazumi/services/player/timed_shutdown_service.dart';
 import 'package:kazumi/utils/format.dart';
 import 'package:kazumi/pages/player/player_transport_bar.dart';
 import 'package:kazumi/pages/player/player_screenshot_controls.dart';
+import 'package:kazumi/bean/appbar/window_minimize_button.dart';
 
 class PlayerItemPanel extends StatefulWidget {
   const PlayerItemPanel({
@@ -795,6 +796,8 @@ class _PlayerItemPanelState extends State<PlayerItemPanel> {
                 ),
               ),
               _forwardButton(),
+              if (_desktop)
+                const WindowMinimizeButton(color: Colors.white),
               if (_desktop)
                 PlayerScreenshotControls(
                   controller: playerController.screenshots,

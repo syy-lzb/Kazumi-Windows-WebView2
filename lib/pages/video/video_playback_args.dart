@@ -19,12 +19,24 @@ class OnlineVideoPlaybackArgs extends VideoPlaybackArgs {
     required this.title,
     required this.src,
     required this.roads,
+    this.startAtSource = false,
   });
 
   final Plugin plugin;
   final String title;
   final String src;
   final List<Road> roads;
+  final bool startAtSource;
+
+  /// 明确点击单视频搜索结果时，播放该 URL 在归集列表中的位置。
+  int? get initialEpisode {
+    if (!startAtSource || roads.isEmpty) return null;
+    final index = roads.first.data.indexOf(plugin.buildFullUrl(src));
+    return index < 0 ? null : index + 1;
+  }
+
+  bool canResumeEpisode(int episode, int road) =>
+      initialEpisode == null || (road == 0 && episode == initialEpisode);
 }
 
 class OfflineVideoPlaybackArgs extends VideoPlaybackArgs {

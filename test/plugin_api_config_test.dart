@@ -3,10 +3,125 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kazumi/plugins/api_rule_config.dart';
 import 'package:kazumi/plugins/plugins.dart';
+import 'package:kazumi/modules/search/plugin_search_module.dart';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/request/config/api_endpoints.dart';
 import 'package:kazumi/utils/encoding.dart';
 
 void main() {
+  final directPlugin = Plugin.fromJson({
+    ..._legacyRule,
+    'baseURL': 'https://hanime1.me/',
+    'chapterRoads': '@self',
+    'chapterResult': '@self',
+  });
+  SearchItem result(String name, int id) =>
+      SearchItem(name: name, src: '/watch?v=$id');
+
+  test(
+    '@self starts the clicked episode and does not resume another episode',
+    () async {
+      final selected = result('洗衣店小新 2', 2);
+      final roads = await directPlugin.queryChapterRoads(
+        selected.src,
+        selectedResult: selected,
+        searchResults: [result('洗衣店小新 1', 1)],
+      );
+      final item = BangumiItem(
+        id: 1,
+        type: 2,
+        name: '洗衣店小新',
+        nameCn: '',
+        summary: '',
+        airDate: '',
+        airWeekday: 0,
+        rank: 0,
+        images: {},
+        tags: [],
+        alias: [],
+        ratingScore: 0,
+        votes: 0,
+        votesCount: [],
+        info: '',
+      );
+      final args = OnlineVideoPlaybackArgs(
+        bangumiItem: item,
+        plugin: directPlugin,
+        title: selected.name,
+        src: selected.src,
+        roads: roads,
+        startAtSource: true,
+      );
+      expect(args.initialEpisode, 2);
+      expect(args.canResumeEpisode(1, 0), isFalse);
+      expect(args.canResumeEpisode(2, 0), isTrue);
+      expect(args.canResumeEpisode(2, 1), isFalse);
+      final ordinary = OnlineVideoPlaybackArgs(
+        bangumiItem: item,
+        plugin: directPlugin,
+        title: selected.name,
+        src: selected.src,
+        roads: roads,
+      );
+      expect(ordinary.initialEpisode, isNull);
+      expect(ordinary.canResumeEpisode(1, 0), isTrue);
+    },
+  );
+
+  test(
+    '@self groups matching series, sorts episodes and deduplicates URLs',
+    () async {
+      final selected = result('洗衣店小新 2', 2);
+      final roads = await directPlugin.queryChapterRoads(
+        selected.src,
+        selectedResult: selected,
+        searchResults: [
+          result('洗衣店小新 10', 10),
+          selected,
+          result('洗衣店小新 1', 1),
+          result('洗衣店小新 1', 1),
+          result('洗衣店小新 番外 1', 3),
+          result('其他作品 1', 4),
+        ],
+      );
+      expect(roads.single.data, [
+        'https://hanime1.me/watch?v=1',
+        'https://hanime1.me/watch?v=2',
+        'https://hanime1.me/watch?v=10',
+      ]);
+      expect(roads.single.identifier, ['第1集', '第2集', '第10集']);
+    },
+  );
+
+  test(
+    '@self keeps unnumbered titles separate and preserves clicked result',
+    () async {
+      final selected = result('独立作品', 5);
+      final roads = await directPlugin.queryChapterRoads(
+        selected.src,
+        selectedResult: selected,
+        searchResults: [result('独立作品 2', 6)],
+      );
+      expect(roads.single.data, ['https://hanime1.me/watch?v=5']);
+      expect(roads.single.identifier, ['独立作品']);
+    },
+  );
+
+  test('@self recognizes explicit Chinese episode suffixes', () async {
+    final selected = result('作品 第2集', 2);
+    final roads = await directPlugin.queryChapterRoads(
+      selected.src,
+      selectedResult: selected,
+      searchResults: [result('作品 第1集', 1)],
+    );
+    expect(roads.single.data, [
+      'https://hanime1.me/watch?v=1',
+      'https://hanime1.me/watch?v=2',
+    ]);
+    expect(roads.single.identifier, ['第1集', '第2集']);
+  });
+
   test('legacy plugin defaults to XPath modes', () {
     final plugin = Plugin.fromJson(_legacyRule);
     expect(plugin.searchMode, RuleMode.xpath);

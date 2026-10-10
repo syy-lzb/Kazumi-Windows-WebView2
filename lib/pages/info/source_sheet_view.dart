@@ -62,6 +62,7 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
   final _scrollController = ScrollController();
   final _display = <String, _SourceDisplay>{};
   final _headerKeys = <String, GlobalKey>{};
+  final _showLowRelevance = <String>{};
   bool _autoExpansionHandled = false;
 
   @override
@@ -76,6 +77,13 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
     final names = widget.groups.map((group) => group.name).toSet();
     _display.removeWhere((name, _) => !names.contains(name));
     _headerKeys.removeWhere((name, _) => !names.contains(name));
+    _showLowRelevance.removeWhere((name) => !names.contains(name));
+    for (final group in widget.groups) {
+      if (oldWidget.groups.any((old) =>
+          old.name == group.name && old.keyword != group.keyword)) {
+        _showLowRelevance.remove(group.name);
+      }
+    }
     _autoExpandFirstResult();
   }
 
@@ -306,15 +314,25 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
 
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
-    final visibleCount = showAll ? group.results.length : 1;
+    final regularCount = group.results.where(
+      (item) => item.relevance >= sourcePossibleThreshold).length;
+    final lowCount = group.results.length - regularCount;
+    final showLow = _showLowRelevance.contains(group.name);
+    final availableCount = showLow ? group.results.length : regularCount;
+    final visibleCount = showAll ? availableCount : (availableCount > 0 ? 1 : 0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (availableCount == 0)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('暂无高度相关结果，可展开低相关候选或修改检索词'),
+          ),
         for (var index = 0; index < visibleCount; index++) ...[
           if (index > 0) const SizedBox(height: splitListRowGap),
           _buildResult(group, index),
         ],
-        if (group.results.length > 1) ...[
+        if (availableCount > 1) ...[
           const SizedBox(height: splitListRowGap),
           SplitListRow(
             bottomRadius: splitListOuterRadius,
@@ -331,7 +349,7 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
                   children: [
                     Flexible(
                       child: Text(
-                        showAll ? '收起全部条目' : '展开全部 ${group.results.length} 个结果',
+                        showAll ? '收起全部条目' : '展开 $availableCount 个相关结果',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.labelLarge
                             ?.copyWith(color: primary),
@@ -348,6 +366,26 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
                   ],
                 ),
               ),
+            ),
+          ),
+        ],
+        if (lowCount > 0) ...[
+          const SizedBox(height: splitListRowGap),
+          SplitListRow(
+            bottomRadius: splitListOuterRadius,
+            onTap: () => setState(() {
+              if (showLow) {
+                _showLowRelevance.remove(group.name);
+              } else {
+                _showLowRelevance.add(group.name);
+                _display[group.name] = _SourceDisplay.expanded;
+              }
+            }),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(showLow ? '收起低相关候选' : '展开 $lowCount 个低相关候选',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.labelLarge?.copyWith(color: primary)),
             ),
           ),
         ],
@@ -405,10 +443,18 @@ class _SourceSheetViewState extends State<_SourceSheetView> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(result.name,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                      )),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(result.name, style: theme.textTheme.bodyLarge?.copyWith(
+                        color: theme.colorScheme.onSurface)),
+                      if (result.relevance < sourcePriorityThreshold)
+                        Text(result.relevance >= sourcePossibleThreshold
+                            ? '可能相关 · 译名可能不同' : '低相关候选',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant)),
+                    ],
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Icon(Icons.play_arrow_rounded,

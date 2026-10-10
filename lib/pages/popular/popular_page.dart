@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:kazumi/bean/appbar/window_minimize_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:kazumi/bean/widget/bangumi_mirror_error_widget.dart';
@@ -249,6 +250,8 @@ class _PopularPageState extends State<PopularPage> {
         onPressed: () => context.pushNamed('/settings/history/'),
         icon: const Icon(Icons.history),
       ),
+      if (isDesktop() && !DesktopWindowConfig.showWindowButton)
+        const WindowMinimizeButton(),
       if (isDesktop() && !DesktopWindowConfig.showWindowButton)
         IconButton(
           tooltip: '退出',
